@@ -1,0 +1,67 @@
+with mth as (
+    SELECT *
+    , FORMAT_DATE('%Y-%m', PARSE_DATE('%Y%m%d',  cast(SHOP_DATE as string))) as SHOP_MONTH
+    , FORMAT_DATE('%Y-%m', date_sub(PARSE_DATE('%Y%m%d',  cast(SHOP_DATE as string)), interval 1 month))  as SHOP_MONTH_PREV
+    , FORMAT_DATE('%Y-%m', date_sub(PARSE_DATE('%Y%m%d',  cast(SHOP_DATE as string)), interval -1 month))  as SHOP_MONTH_NEXT
+    FROM `crmtest-308203.supermarket.supermarket_ss` 
+)
+, flag_grp as (
+    select a.CUST_CODE
+    , a.SHOP_MONTH
+    , case when rn = 1 then 'new'
+            when b.SHOP_MONTH is not null then 'repeat'
+            else 'reactivated' end as grp
+    from (
+        select CUST_CODE
+        , SHOP_MONTH
+        , SHOP_MONTH_PREV
+        , row_number() over(partition by CUST_CODE order by SHOP_MONTH) as rn
+        from mth
+        group by 1,2,3
+    ) a 
+    left join (
+        select CUST_CODE
+        , SHOP_MONTH
+        from mth
+        group by 1,2
+    ) b 
+    on a.CUST_CODE = b.CUST_CODE
+    and a.SHOP_MONTH_PREV = b.SHOP_MONTH
+)
+, flag_churn as (
+    select a.CUST_CODE
+    , a.SHOP_MONTH_NEXT as SHOP_MONTH
+    , 'churn' as grp
+    from (
+        select CUST_CODE
+        , SHOP_MONTH_NEXT
+        from mth
+        group by 1,2
+    ) a 
+    left join (
+        select CUST_CODE
+        , SHOP_MONTH
+        from mth
+        group by 1,2
+    ) b 
+    on a.CUST_CODE = b.CUST_CODE
+    and a.SHOP_MONTH_NEXT = b.SHOP_MONTH
+    where b.SHOP_MONTH is null
+)
+, flag as (
+    select *
+    from flag_grp
+    union all 
+    select *
+    from flag_churn
+)
+select SHOP_MONTH
+, sum(case when grp = 'new' then 1 else 0 end) as new_cust
+, sum(case when grp = 'repeat' then 1 else 0 end) as repeat_cust
+, sum(case when grp = 'reactivated' then 1 else 0 end) as reactivated_cust
+, sum(case when grp = 'churn' then 1 else 0 end) as churn_cust
+, sum(case when grp <> 'churn' then 1 else 0 end) as total_cust
+from flag
+where CUST_CODE is not null
+group by 1
+order by 1,2
